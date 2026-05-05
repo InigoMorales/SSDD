@@ -1,0 +1,163 @@
+============================================================
+  SERVICIO DE MENSAJERIA DISTRIBUIDO - SSDD UC3M 2025-2026
+============================================================
+
+AUTORES
+-------
+  Ver autores.txt
+
+------------------------------------------------------------
+DESCRIPCION DEL PROYECTO
+------------------------------------------------------------
+
+Sistema de mensajeria distribuido tipo WhatsApp simplificado,
+compuesto por:
+
+  - Servidor de mensajeria (C, sockets TCP, multihilo)
+  - Cliente de usuario     (Python, sockets TCP, multihilo)
+  - Conversor de mensajes  (Python, servicio web HTTP)
+  - Servicio de registro   (C, ONC-RPC) [Parte 2 - RPC]
+
+------------------------------------------------------------
+REQUISITOS DEL SISTEMA
+------------------------------------------------------------
+
+  - Linux (Ubuntu 20.04 / 22.04 o compatible)
+  - GCC >= 9
+  - Python >= 3.8
+  - make
+  - Docker (opcional, para pruebas con IPs distintas)
+
+------------------------------------------------------------
+COMPILACION
+------------------------------------------------------------
+
+  1. Servidor de mensajeria (C):
+
+       make
+
+     Esto genera el ejecutable './server'.
+     Para limpiar:
+
+       make clean
+
+------------------------------------------------------------
+EJECUCION
+------------------------------------------------------------
+
+  ORDEN RECOMENDADO DE ARRANQUE:
+  --------------------------------
+  1. Servicio web         (maquina del cliente)
+  2. Servidor RPC         (maquina separada, solo Parte 2)
+  3. Servidor de mensajes (con LOG_RPC_IP si hay RPC)
+  4. Cliente(s)
+
+  -- 1. Servidor de mensajeria --
+
+       ./server -p <PUERTO>
+
+     Ejemplo:
+       ./server -p 8888
+
+     Al arrancar muestra:
+       s> init server <IP>:<PUERTO>
+       s>
+
+     Terminar con Ctrl+C (SIGINT).
+
+  -- 2. Cliente --
+
+       python3 client.py -s <IP_SERVIDOR> -p <PUERTO_SERVIDOR>
+
+     Ejemplo (local):
+       python3 client.py -s localhost -p 8888
+
+     Ejemplo (contenedor / red):
+       python3 client.py -s 172.17.0.2 -p 8888
+
+     Comandos disponibles en la shell del cliente:
+
+       REGISTER   <userName>
+       UNREGISTER <userName>
+       CONNECT    <userName>
+       DISCONNECT <userName>
+       USERS
+       SEND       <userName> <mensaje>
+       SENDATTACH <userName> <fichero> <mensaje>
+       QUIT
+
+  -- 3. Servicio Web (Parte 2) --
+
+       python3 web_service.py
+
+     Escucha en http://localhost:8080/normalize
+     Health-check: GET http://localhost:8080/health
+
+     Cada cliente debe tener su propio servicio web desplegado
+     en su maquina local.
+
+------------------------------------------------------------
+PRUEBAS CON DOCKER
+------------------------------------------------------------
+
+  Construir imagen base (Ubuntu con Python y GCC):
+
+    docker build -t ssdd .
+
+  Lanzar red de contenedores:
+
+    docker network create ssdd-net
+
+    # Servidor
+    docker run --rm --name server --network ssdd-net ssdd \
+      ./server -p 8888
+
+    # Cliente 1
+    docker run --rm -it --name client1 --network ssdd-net ssdd \
+      python3 client.py -s server -p 8888
+
+    # Cliente 2
+    docker run --rm -it --name client2 --network ssdd-net ssdd \
+      python3 client.py -s server -p 8888
+
+------------------------------------------------------------
+ESTRUCTURA DE FICHEROS
+------------------------------------------------------------
+
+  server.c          -> Servidor de mensajeria (C)
+  client.py         -> Cliente de usuario (Python)
+  web_service.py    -> Conversor de mensajes - servicio web (Python)
+  Makefile          -> Compilacion del servidor
+  README            -> Este fichero
+  autores.txt       -> Nombres y NIAs de los autores
+  memoria.pdf       -> Memoria de la practica
+
+------------------------------------------------------------
+PROTOCOLO DE COMUNICACION (resumen)
+------------------------------------------------------------
+
+  Todas las cadenas terminan en '\0' (null-terminated).
+  Los codigos de respuesta son 1 byte (0=OK, 1=USER_ERROR, 2+=ERROR).
+
+  REGISTER:     -> "REGISTER\0" + nombre\0
+                <- byte resultado
+  UNREGISTER:   -> "UNREGISTER\0" + nombre\0
+                <- byte resultado
+  CONNECT:      -> "CONNECT\0" + nombre\0 + puerto_escucha\0
+                <- byte resultado
+  DISCONNECT:   -> "DISCONNECT\0" + nombre\0
+                <- byte resultado
+  SEND:         -> "SEND\0" + remitente\0 + dest\0 + mensaje\0
+                <- byte resultado [+ id\0 si OK]
+  SENDATTACH:   -> "SENDATTACH\0" + remitente\0 + dest\0 + msg\0 + fichero\0
+                <- byte resultado [+ id\0 si OK]
+  USERS:        -> "USERS\0" + nombre\0
+                <- byte resultado [+ count\0 + N*(user::IP::port\0)]
+
+  Servidor -> Cliente (hilo receptor):
+    SEND_MESSAGE:         "SEND_MESSAGE\0" + sender\0 + id\0 + msg\0
+    SEND_MESS_ACK:        "SEND_MESS_ACK\0" + id\0
+    SEND_MESSAGE_ATTACH:  "SEND_MESSAGE_ATTACH\0" + sender\0 + id\0 + msg\0 + file\0
+    SEND_MESS_ATTACH_ACK: "SEND_MESS_ATTACH_ACK\0" + id\0 + file\0
+
+============================================================
