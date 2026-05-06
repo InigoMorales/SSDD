@@ -13,7 +13,10 @@ import socket
 import threading
 import argparse
 import sys
+import os
 from enum import Enum
+
+from web_service import call_normalize
 
 
 class client:
@@ -47,17 +50,19 @@ class client:
         sock.sendall(msg)
 
     @staticmethod
-    def _recv_string(sock):
+    def _recv_string(sock, max_length=4096):
         """
         Recibe una cadena del socket hasta encontrar el terminador nulo '\0'.
         Lee byte a byte para no consumir datos extra del buffer.
         """
-        result = b''
-        while True:
+        result = bytearray()
+        while len(result) < max_length:
             byte = sock.recv(1)
             if not byte or byte == b'\0':
                 break
             result += byte
+        if len(result) >= max_length:
+            raise ConnectionError("Maximum string length exceeded (missing null terminator)")
         return result.decode('utf-8')
 
     @staticmethod
@@ -168,6 +173,9 @@ class client:
                     requester = client._recv_string(conn)
                     file_name = client._recv_string(conn)
 
+                    # Saneamiento estricto contra Path Traversal
+                    file_name = os.path.basename(file_name)
+
                     try:
                         with open(file_name, 'rb') as f:
                             data = f.read()
@@ -204,18 +212,18 @@ class client:
           4. Recibir 1 byte: 0=OK, 1=ya existe, 2=error
           5. Cerrar conexion
         """
+        sock = None
         try:
             sock = client._connect_to_server()
             client._send_string(sock, "REGISTER")
             client._send_string(sock, user)
             result = client._recv_byte(sock)
-            sock.close()
 
             if result == 0:
                 print("c> REGISTER OK")
                 return client.RC.OK
             elif result == 1:
-                print("c> USERNAME IN USE")
+                print("c> USERNAME ALREADY IN USE")
                 return client.RC.USER_ERROR
             else:
                 print("c> REGISTER FAIL")
@@ -224,6 +232,10 @@ class client:
         except Exception as e:
             print("c> REGISTER FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     @staticmethod
     def unregister(user):
@@ -236,12 +248,12 @@ class client:
           4. Recibir 1 byte: 0=OK, 1=no existe, 2=error
           5. Cerrar conexion
         """
+        sock = None
         try:
             sock = client._connect_to_server()
             client._send_string(sock, "UNREGISTER")
             client._send_string(sock, user)
             result = client._recv_byte(sock)
-            sock.close()
 
             if result == 0:
                 print("c> UNREGISTER OK")
@@ -256,6 +268,10 @@ class client:
         except Exception as e:
             print("c> UNREGISTER FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     @staticmethod
     def connect(user):
@@ -341,12 +357,12 @@ class client:
           4. Recibir 1 byte: 0=OK, 1=no existe, 2=no conectado, 3=error
           5. Cerrar conexion
         """
+        sock = None
         try:
             sock = client._connect_to_server()
             client._send_string(sock, "DISCONNECT")
             client._send_string(sock, user)
             result = client._recv_byte(sock)
-            sock.close()
 
             # Segun el enunciado: parar el hilo siempre, incluso en error
             client._stop_event.set()
@@ -373,6 +389,10 @@ class client:
             client._listen_port    = None
             print("c> DISCONNECT FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     @staticmethod
     def users():
@@ -388,6 +408,7 @@ class client:
           6. Recibir tantas cadenas como usuarios (una por usuario)
           7. Cerrar conexion
         """
+        sock = None
         try:
             sock = client._connect_to_server()
             client._send_string(sock, "USERS")
@@ -402,7 +423,6 @@ class client:
                 for _ in range(count):
                     u = client._recv_string(sock)
                     users_list.append(u)
-                sock.close()
 
                 print(f"c> CONNECTED USERS ({count} users connected) OK")
                 for u in users_list:
@@ -410,17 +430,19 @@ class client:
                 return client.RC.OK
 
             elif result == 1:
-                sock.close()
                 print("c> CONNECTED USERS FAIL, USER IS NOT CONNECTED")
                 return client.RC.USER_ERROR
             else:
-                sock.close()
                 print("c> CONNECTED USERS FAIL")
                 return client.RC.ERROR
 
         except Exception as e:
             print("c> CONNECTED USERS FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     @staticmethod
     def send(user, message):
@@ -437,6 +459,7 @@ class client:
           6. Recibir 1 byte: 0=OK (+ id como cadena), 1=no existe, 2=error
           7. Cerrar conexion
         """
+        sock = None
         try:
             # El mensaje tiene un maximo de 255 caracteres (256 con '\0')
             if len(message) > 255:
@@ -446,26 +469,31 @@ class client:
             client._send_string(sock, "SEND")
             client._send_string(sock, client._connected_user if client._connected_user else "")
             client._send_string(sock, user)
+
+            # Normalizar espacios del mensaje a traves del servicio web
+            message = call_normalize(message)
             client._send_string(sock, message)
+
             result = client._recv_byte(sock)
 
             if result == 0:
                 msg_id = client._recv_string(sock)
-                sock.close()
                 print(f"c> SEND OK - MESSAGE {msg_id}")
                 return client.RC.OK
             elif result == 1:
-                sock.close()
                 print("c> SEND FAIL, USER DOES NOT EXIST")
                 return client.RC.USER_ERROR
             else:
-                sock.close()
                 print("c> SEND FAIL")
                 return client.RC.ERROR
 
         except Exception as e:
             print("c> SEND FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     @staticmethod
     def sendAttach(user, file, message):
@@ -481,6 +509,7 @@ class client:
           7. Recibir 1 byte resultado + id si OK
           8. Cerrar conexion
         """
+        sock = None
         try:
             if len(message) > 255:
                 message = message[:255]
@@ -489,27 +518,32 @@ class client:
             client._send_string(sock, "SENDATTACH")
             client._send_string(sock, client._connected_user if client._connected_user else "")
             client._send_string(sock, user)
+
+            # Normalizar espacios del mensaje a traves del servicio web
+            message = call_normalize(message)
             client._send_string(sock, message)
+
             client._send_string(sock, file)
             result = client._recv_byte(sock)
 
             if result == 0:
                 msg_id = client._recv_string(sock)
-                sock.close()
                 print(f"c> SENDATTACH OK - MESSAGE {msg_id}")
                 return client.RC.OK
             elif result == 1:
-                sock.close()
                 print("c> SENDATTACH FAIL, USER DOES NOT EXIST")
                 return client.RC.USER_ERROR
             else:
-                sock.close()
                 print("c> SENDATTACH FAIL")
                 return client.RC.ERROR
 
         except Exception as e:
             print("c> SENDATTACH FAIL")
             return client.RC.ERROR
+        finally:
+            # Cerrar siempre el socket, incluso si hay una excepcion de red
+            if sock is not None:
+                sock.close()
 
     # ==================== SHELL INTERACTIVA ====================
 

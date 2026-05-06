@@ -50,6 +50,9 @@ class NormalizeHandler(BaseHTTPRequestHandler):
         try:
             # Leer el body de la peticion
             length   = int(self.headers.get('Content-Length', 0))
+            if length > 1024 * 1024:  # Limite estricto de 1MB para prevenir DoS
+                self._send_error(413, "Payload Too Large")
+                return
             raw_body = self.rfile.read(length)
             body     = json.loads(raw_body.decode('utf-8'))
 
