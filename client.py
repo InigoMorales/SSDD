@@ -179,7 +179,7 @@ class client:
                     try:
                         with open(file_name, 'rb') as f:
                             data = f.read()
-                        # Enviar tamano y contenido
+                        # Enviar tamaño y contenido
                         size_str = str(len(data))
                         client._send_string(conn, size_str)
                         conn.sendall(data)
@@ -545,6 +545,105 @@ class client:
             if sock is not None:
                 sock.close()
 
+    @staticmethod
+    def getFile(user, file_name):
+        """
+        Solicita un fichero a otro usuario conectado (Parte 2, operacion peer-to-peer).
+        Protocolo:
+          1. Consultar al servidor (USERS) para obtener la IP y puerto del usuario
+          2. Conectar directamente al hilo receptor del usuario propietario
+          3. Enviar "GET_FILE\0"
+          4. Enviar nombre del solicitante\0
+          5. Enviar nombre del fichero\0
+          6. Recibir tamaño del fichero como cadena\0
+          7. Recibir contenido binario del fichero
+          8. Guardar el fichero localmente
+          9. Cerrar conexion
+        """
+        try:
+            # Verificar que estamos conectados
+            if not client._connected_user:
+                print("c> GETFILE FAIL, USER NOT CONNECTED")
+                return client.RC.ERROR
+
+            # Paso 1: consultar al servidor para obtener IP y puerto del usuario
+            sock = client._connect_to_server()
+            client._send_string(sock, "USERS")
+            client._send_string(sock, client._connected_user)
+            result = client._recv_byte(sock)
+
+            if result != 0:
+                sock.close()
+                print("c> GETFILE FAIL")
+                return client.RC.ERROR
+
+            # Parsear la lista de usuarios conectados
+            count_str = client._recv_string(sock)
+            count = int(count_str)
+            target_ip = None
+            target_port = None
+
+            for _ in range(count):
+                entry = client._recv_string(sock)
+                # Formato del servidor: "usuario :: IP :: puerto"
+                parts = entry.split(" :: ")
+                if len(parts) == 3 and parts[0] == user:
+                    target_ip = parts[1]
+                    target_port = int(parts[2])
+
+            sock.close()
+
+            # Verificar que encontramos al usuario
+            if target_ip is None or target_port is None:
+                print("c> GETFILE FAIL, USER NOT CONNECTED")
+                return client.RC.USER_ERROR
+
+            # Paso 2: conectar directamente al listener del usuario propietario
+            peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            peer_sock.connect((target_ip, target_port))
+
+            # Paso 3-5: enviar solicitud GET_FILE
+            client._send_string(peer_sock, "GET_FILE")
+            client._send_string(peer_sock, client._connected_user)
+            client._send_string(peer_sock, file_name)
+
+            # Paso 6: recibir tamano del fichero
+            size_str = client._recv_string(peer_sock)
+            file_size = int(size_str)
+
+            if file_size <= 0:
+                peer_sock.close()
+                print("c> GETFILE FAIL, FILE NOT FOUND")
+                return client.RC.ERROR
+
+            # Paso 7: recibir contenido binario
+            data = bytearray()
+            remaining = file_size
+            while remaining > 0:
+                chunk = peer_sock.recv(min(remaining, 4096))
+                if not chunk:
+                    break
+                data += chunk
+                remaining -= len(chunk)
+
+            peer_sock.close()
+
+            if len(data) != file_size:
+                print("c> GETFILE FAIL")
+                return client.RC.ERROR
+
+            # Paso 8: guardar fichero localmente (saneamiento contra Path Traversal)
+            safe_name = os.path.basename(file_name)
+            with open(safe_name, 'wb') as f:
+                f.write(data)
+
+            print(f"c> GETFILE {safe_name} OK")
+            return client.RC.OK
+
+        except Exception as e:
+            print("c> GETFILE FAIL")
+            return client.RC.ERROR
+
     # ==================== SHELL INTERACTIVA ====================
 
     @staticmethod
@@ -611,7 +710,11 @@ class client:
                         break
                     else:
                         print("Syntax error. Use: QUIT")
-
+                elif line[0] == "GETFILE":
+                    if len(line) == 3:
+                        client.getFile(line[1], line[2]) 
+                    else:
+                        print("Syntax error. Usage: GETFILE <userName> <filename>")
                 else:
                     print("Error: command " + line[0] + " not valid.")
 
