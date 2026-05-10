@@ -106,16 +106,16 @@ def check(test_name, lines_list, expected_substr, should_exist=True):
     found = expected_substr in full_output
 
     if should_exist and found:
-        log(f"  ✅ PASS: {test_name}")
+        log(f"  [PASS] {test_name}")
         _pass_count += 1
         return True
     elif not should_exist and not found:
-        log(f"  ✅ PASS: {test_name}")
+        log(f"  [PASS] {test_name}")
         _pass_count += 1
         return True
     else:
         action = "encontrar" if should_exist else "NO encontrar"
-        log(f"  ❌ FAIL: {test_name} — Se esperaba {action}: '{expected_substr}'")
+        log(f"  [FAIL] {test_name} — Se esperaba {action}: '{expected_substr}'")
         recent = lines_list[-8:] if len(lines_list) > 8 else lines_list
         for line in recent:
             log(f"         | {line}")
@@ -223,7 +223,7 @@ def main():
             if proc.poll() is not None:
                 log(f"ERROR: El proceso '{name}' murió antes de tiempo (rc={proc.returncode})")
                 sys.exit(1)
-        log("Los tres servicios están en pie ✓")
+        log("Los tres servicios están en pie")
 
         # ── Cliente 1 (dani) ──────────────────────────────────────────────
         log("Abriendo client.py para 'dani'...")
@@ -321,7 +321,7 @@ def main():
         check("9.  SEND a usuario nunca registrado → USER DOES NOT EXIST", out1, "USER DOES NOT EXIST")
 
         # Mostrar logs RPC capturados hasta ahora
-        log("  ℹ️  Logs RPC capturados:")
+        log("  Logs RPC capturados:")
         for line in rpc_lines:
             log(f"     rpc| {line}")
 
@@ -522,7 +522,7 @@ def main():
         processes = [(n, p) for n, p in processes if n != "web_service"]
         processes.append(("web_service", web_proc))
         time.sleep(1.0)
-        log("  web_service.py reiniciado ✓")
+        log("  web_service.py reiniciado")
 
         # =====================================================================
         #  PRUEBA H: Borrado de Usuarios (Unregister)
@@ -558,11 +558,11 @@ def main():
         log("RESUMEN DE RESULTADOS")
         log("═" * 60)
         total = _pass_count + _fail_count
-        log(f"  Total: {total} pruebas | ✅ {_pass_count} PASS | ❌ {_fail_count} FAIL")
+        log(f"  Total: {total} pruebas | {_pass_count} PASS | {_fail_count} FAIL")
         if _fail_count == 0:
-            log("  🎉 TODAS LAS PRUEBAS SUPERADAS — Sistema completamente funcional")
+            log("  TODAS LAS PRUEBAS SUPERADAS — Sistema completamente funcional")
         else:
-            log(f"  ⚠️  {_fail_count} prueba(s) fallida(s) — Revisar diagnósticos arriba")
+            log(f"  AVISO: {_fail_count} prueba(s) fallida(s) — Revisar diagnósticos arriba")
         log("═" * 60)
 
         # ── Cerrar clientes de forma limpia ───────────────────────────────

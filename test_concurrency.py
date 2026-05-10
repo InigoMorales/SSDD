@@ -36,12 +36,12 @@ def check(test_name, lines_list, expected_substr, should_exist=True):
     found = expected_substr in full_output
 
     if (should_exist and found) or (not should_exist and not found):
-        log(f"  ✅ PASS: {test_name}")
+        log(f"  [PASS] {test_name}")
         _pass_count += 1
         return True
     else:
         action = "encontrar" if should_exist else "NO encontrar"
-        log(f"  ❌ FAIL: {test_name} — Se esperaba {action}: '{expected_substr}'")
+        log(f"  [FAIL] {test_name} — Se esperaba {action}: '{expected_substr}'")
         recent = lines_list[-6:] if len(lines_list) > 6 else lines_list
         for line in recent:
             log(f"         | {line}")
@@ -117,7 +117,7 @@ def main():
             if proc.poll() is not None:
                 log(f"ERROR: '{name}' murió antes de tiempo. Abortando.")
                 sys.exit(1)
-        log("Servicios en pie ✓")
+        log("Servicios en pie")
 
         # ── Lanzar 4 clientes ─────────────────────────────────────────────────
         USERS = ["alice", "bob", "carol", "dave"]
@@ -219,7 +219,7 @@ def main():
                     all_ok = False
 
         if all_ok:
-            log("  → Ningún mensaje se perdió bajo carga concurrente ✓")
+            log("  -> Ningun mensaje se perdio bajo carga concurrente")
 
         # =====================================================================
         #  FASE 3: DISCONNECT y RECONNECT concurrentes
@@ -264,10 +264,10 @@ def main():
 
         global _pass_count, _fail_count
         if server_proc.poll() is not None:
-            log(f"  ❌ FAIL: El servidor murió durante las pruebas (rc={server_proc.returncode})")
+            log(f"  [FAIL] El servidor murio durante las pruebas (rc={server_proc.returncode})")
             _fail_count += 1
         else:
-            log("  ✅ PASS: El servidor sigue en pie tras toda la carga concurrente ✓")
+            log("  [PASS] El servidor sigue en pie tras toda la carga concurrente")
             _pass_count += 1
 
         # USERS final: verificar que los 4 siguen en la lista
@@ -284,11 +284,11 @@ def main():
         log("RESUMEN DE PRUEBAS DE CONCURRENCIA")
         log("═" * 60)
         total = _pass_count + _fail_count
-        log(f"  Total: {total} checks | ✅ {_pass_count} PASS | ❌ {_fail_count} FAIL")
+        log(f"  Total: {total} checks | {_pass_count} PASS | {_fail_count} FAIL")
         if _fail_count == 0:
-            log("  🎉 CONCURRENCIA: Sistema completamente estable bajo carga")
+            log("  CONCURRENCIA: Sistema completamente estable bajo carga")
         else:
-            log(f"  ⚠️  {_fail_count} check(s) fallido(s) — posible problema de concurrencia")
+            log(f"  AVISO: {_fail_count} check(s) fallido(s) — posible problema de concurrencia")
         log("═" * 60)
 
         # ── Cerrar clientes ───────────────────────────────────────────────────
