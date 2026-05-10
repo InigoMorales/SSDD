@@ -26,20 +26,39 @@ REQUISITOS DEL SISTEMA
   - GCC >= 9
   - Python >= 3.8
   - make
+  - rpcgen (paquete rpcsvc-proto en Ubuntu 22.04)
   - Docker (opcional, para pruebas con IPs distintas)
 
 ------------------------------------------------------------
 COMPILACION
 ------------------------------------------------------------
 
-  1. Servidor de mensajeria (C):
+  Compilar servidor y servidor RPC:
 
        make
 
-     Esto genera el ejecutable './server'.
-     Para limpiar:
+     Esto genera los ejecutables './server' y './logger_server'.
+     Para limpiar objetos y binarios:
 
        make clean
+
+------------------------------------------------------------
+ESTRUCTURA DE FICHEROS
+------------------------------------------------------------
+
+  server.c               -> Servidor de mensajeria (C, multihilo)
+  client.py              -> Cliente de usuario (Python)
+  web_service.py         -> Conversor de mensajes - servicio web (Python)
+  rpc_client.c / .h      -> Modulo de logging via RPC para server.c
+  logger.x               -> Interfaz ONC-RPC del servicio de registro
+  logger_server_impl.c   -> Implementacion del servidor RPC (logger)
+  logger_clnt.c / _svc.c / _xdr.c / logger.h  -> Stubs generados por rpcgen
+  Makefile               -> Compilacion del proyecto completo
+  README                 -> Este fichero
+  autores.txt            -> Nombres, NIAs y emails de los autores
+  memoria.pdf            -> Memoria de la practica
+  test_e2e.py            -> Suite de pruebas de integracion E2E automatizadas
+  test_concurrency.py    -> Suite de pruebas de concurrencia automatizadas
 
 ------------------------------------------------------------
 EJECUCION
@@ -47,25 +66,45 @@ EJECUCION
 
   ORDEN RECOMENDADO DE ARRANQUE:
   --------------------------------
-  1. Servicio web         (maquina del cliente)
-  2. Servidor RPC         (maquina separada, solo Parte 2)
-  3. Servidor de mensajes (con LOG_RPC_IP si hay RPC)
+  1. Servidor RPC logger  (maquina separada o localhost)
+  2. Servidor de mensajes (con LOG_RPC_IP si hay RPC)
+  3. Servicio web         (maquina del cliente)
   4. Cliente(s)
 
-  -- 1. Servidor de mensajeria --
+  -- 1. Servidor RPC (logger) --
 
+       ./logger_server
+
+     Escucha conexiones RPC. Muestra por pantalla cada operacion
+     registrada por el servidor de mensajeria.
+
+  -- 2. Servidor de mensajeria --
+
+       export LOG_RPC_IP=<IP_DEL_LOGGER>
        ./server -p <PUERTO>
 
-     Ejemplo:
-       ./server -p 8888
+     Ejemplo (todo en localhost):
+       export LOG_RPC_IP=127.0.0.1 && ./server -p 8888
 
      Al arrancar muestra:
        s> init server <IP>:<PUERTO>
        s>
 
      Terminar con Ctrl+C (SIGINT).
+     Si LOG_RPC_IP no esta definida, el servidor funciona sin RPC.
 
-  -- 2. Cliente --
+  -- 3. Servicio Web --
+
+       python3 web_service.py
+
+     Escucha en http://localhost:8080/normalize
+     Health-check: GET http://localhost:8080/health
+
+     Cada cliente debe tener su propio servicio web desplegado
+     en su maquina local. Si no esta corriendo, el cliente usa
+     el mensaje original como fallback (no hay crash).
+
+  -- 4. Cliente --
 
        python3 client.py -s <IP_SERVIDOR> -p <PUERTO_SERVIDOR>
 
@@ -84,17 +123,8 @@ EJECUCION
        USERS
        SEND       <userName> <mensaje>
        SENDATTACH <userName> <fichero> <mensaje>
+       GETFILE    <userName> <fichero>
        QUIT
-
-  -- 3. Servicio Web (Parte 2) --
-
-       python3 web_service.py
-
-     Escucha en http://localhost:8080/normalize
-     Health-check: GET http://localhost:8080/health
-
-     Cada cliente debe tener su propio servicio web desplegado
-     en su maquina local.
 
 ------------------------------------------------------------
 PRUEBAS CON DOCKER
@@ -121,18 +151,6 @@ PRUEBAS CON DOCKER
       python3 client.py -s server -p 8888
 
 ------------------------------------------------------------
-ESTRUCTURA DE FICHEROS
-------------------------------------------------------------
-
-  server.c          -> Servidor de mensajeria (C)
-  client.py         -> Cliente de usuario (Python)
-  web_service.py    -> Conversor de mensajes - servicio web (Python)
-  Makefile          -> Compilacion del servidor
-  README            -> Este fichero
-  autores.txt       -> Nombres y NIAs de los autores
-  memoria.pdf       -> Memoria de la practica
-
-------------------------------------------------------------
 PROTOCOLO DE COMUNICACION (resumen)
 ------------------------------------------------------------
 
@@ -152,12 +170,163 @@ PROTOCOLO DE COMUNICACION (resumen)
   SENDATTACH:   -> "SENDATTACH\0" + remitente\0 + dest\0 + msg\0 + fichero\0
                 <- byte resultado [+ id\0 si OK]
   USERS:        -> "USERS\0" + nombre\0
-                <- byte resultado [+ count\0 + N*(user::IP::port\0)]
+                <- byte resultado [+ count\0 + N*(usuario :: IP :: puerto\0)]
+  GETFILE:      Peer-to-peer directo al listener del cliente propietario:
+                -> "GET_FILE\0" + solicitante\0 + fichero\0
+                <- tamano\0 + datos_binarios
 
-  Servidor -> Cliente (hilo receptor):
+  Servidor -> Cliente (hilo receptor del cliente):
     SEND_MESSAGE:         "SEND_MESSAGE\0" + sender\0 + id\0 + msg\0
     SEND_MESS_ACK:        "SEND_MESS_ACK\0" + id\0
     SEND_MESSAGE_ATTACH:  "SEND_MESSAGE_ATTACH\0" + sender\0 + id\0 + msg\0 + file\0
     SEND_MESS_ATTACH_ACK: "SEND_MESS_ATTACH_ACK\0" + id\0 + file\0
+    GET_FILE:             "GET_FILE\0" + solicitante\0 + fichero\0
+                          <- tamano\0 + datos_binarios
 
+------------------------------------------------------------
+EJECUCION DE LAS PRUEBAS AUTOMATIZADAS
+------------------------------------------------------------
+
+  El proyecto incluye dos suites de pruebas automatizadas que
+  gestionan el ciclo de vida completo (arranque y parada de todos
+  los procesos) sin intervencion manual.
+
+  -- Suite E2E (integracion completa) --
+
+       python3 test_e2e.py
+
+     Ejecuta 29 verificaciones que cubren:
+       - Registro y conexion (Happy Path y Edge Cases)
+       - Lista de usuarios conectados (USERS)
+       - Normalizacion de mensajes via servicio web
+       - Mensajeria diferida (buzon offline)
+       - SENDATTACH con destinatario offline
+       - Transferencia P2P de ficheros (SENDATTACH + GETFILE)
+       - Fallback con el servicio web caido
+       - Borrado de usuarios (UNREGISTER)
+
+  -- Suite de concurrencia --
+
+       python3 test_concurrency.py
+
+     Ejecuta 33 verificaciones que cubren:
+       - REGISTER y CONNECT de 4 clientes en paralelo
+       - 12 mensajes disparados simultaneamente (4 x 3)
+       - DISCONNECT y RECONNECT concurrentes
+       - Integridad del servidor tras la carga
+
+     Resultado verificado: 33/33 PASS. Ninguna condicion de
+     carrera detectada en los mutex del servidor C.
+
+------------------------------------------------------------
+GUIA DE PRUEBAS MANUALES (Evaluacion Paso a Paso)
+------------------------------------------------------------
+
+Para una evaluacion interactiva, abrir 5 terminales y ejecutar
+los servicios en el orden indicado en la seccion EJECUCION.
+A continuacion se detalla la secuencia exacta de comandos.
+
+  PRUEBA A: Registro, Conexion y Control de Estado (Edge Cases)
+  -------------------------------------------------------------
+  Objetivo: verificar el registro de usuarios, las conexiones
+  y el control de errores basicos.
+
+  [Terminal 4 - Cliente 1]:
+    1.  REGISTER dani        -> OK
+    2.  REGISTER dani        -> USERNAME ALREADY IN USE
+    3.  CONNECT fantasma     -> CONNECT FAIL, USER DOES NOT EXIST
+    4.  CONNECT dani         -> OK
+    5.  CONNECT dani         -> USER ALREADY CONNECTED
+
+  [Terminal 5 - Cliente 2]:
+    6.  REGISTER inigo       -> OK
+    7.  CONNECT inigo        -> OK
+
+  Verificar Terminal 1 (RPC): deben aparecer los logs de todas
+  estas operaciones.
+
+  PRUEBA B: Lista de Usuarios Conectados (USERS)
+  -----------------------------------------------
+  Objetivo: el servidor reporta correctamente quien esta en linea.
+
+  [Terminal 4 - Cliente 1]:
+    8.  USERS  -> Lista con 'dani' e 'inigo' en formato
+                  "usuario :: IP :: puerto"
+
+  PRUEBA C: Microservicio Web (Normalizacion de Espacios)
+  --------------------------------------------------------
+  Objetivo: verificar la integracion con el servicio REST.
+
+  [Terminal 4 - Cliente 1]:
+    9.  SEND inigo Hola      prueba      de      espacios
+
+  [Terminal 5 - Cliente 2]:
+    10. Debe recibir: MESSAGE X FROM dani
+                      Hola prueba de espacios
+        (El servicio HTTP ha eliminado los espacios sobrantes.)
+
+  PRUEBA D: Mensajeria Diferida (Buzon Offline)
+  -----------------------------------------------
+  Objetivo: verificar el almacenamiento y entrega de mensajes
+  pendientes.
+
+  [Terminal 5 - Cliente 2]:
+    11. DISCONNECT inigo  -> OK (pasa a offline)
+    12. DISCONNECT inigo  -> FAIL, USER NOT CONNECTED
+
+  [Terminal 4 - Cliente 1]:
+    13. SEND inigo este mensaje te espera en el buzon
+                          -> SEND OK (servidor lo encola)
+
+  [Terminal 5 - Cliente 2]:
+    14. CONNECT inigo     -> OK + recibe el mensaje almacenado
+
+  PRUEBA E: Transferencia P2P y Errores de Fichero (Parte 2)
+  -----------------------------------------------------------
+  Objetivo: verificar el envio de adjuntos y la conexion directa
+  cliente-cliente.
+
+  [Terminal 4 - Cliente 1]:
+    15. SENDATTACH inigo server.c te paso el codigo  -> SENDATTACH OK
+
+  [Terminal 5 - Cliente 2]:
+    16. (Recibe la notificacion de SENDATTACH)
+    17. GETFILE dani archivo_inventado.txt
+                          -> GETFILE FAIL, FILE NOT FOUND
+    18. GETFILE dani server.c
+                          -> GETFILE server.c OK
+                             (fichero guardado localmente)
+
+  PRUEBA F: Fallback del Web Service Caido
+  -----------------------------------------
+  Objetivo: verificar el diseno defensivo si el microservicio falla.
+
+  [Terminal 3]:
+    19. Ctrl+C para detener web_service.py
+
+  [Terminal 4 - Cliente 1]:
+    20. SEND inigo este mensaje no se normalizara
+                          -> SEND OK (sin cuelgue ni crash)
+
+  [Terminal 5 - Cliente 2]:
+    21. Recibe el mensaje (sin normalizar, pero entregado)
+
+  [Terminal 3]:
+    22. python3 web_service.py  (reiniciar si se desea)
+
+  PRUEBA G: Borrado de Usuarios (Unregister)
+  ------------------------------------------
+  Objetivo: verificar el borrado definitivo y sus consecuencias.
+
+  [Terminal 4 - Cliente 1]:
+    23. DISCONNECT dani   -> OK
+    24. UNREGISTER dani   -> OK (dani eliminado del sistema)
+
+  [Terminal 5 - Cliente 2]:
+    25. SEND dani estas?  -> SEND FAIL, USER DOES NOT EXIST
+
+------------------------------------------------------------
+Fin de la guia. Si el sistema supera este guion, todos los
+requisitos de concurrencia, sincronizacion, sockets, RPC y
+HTTP estan funcionando correctamente.
 ============================================================
